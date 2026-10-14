@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+# Claude(plan) -> Codex x N(code, same folder) -> Codex(verify) -> Claude(check) pipeline helper.
+# Without Codex (not installed / not logged in / ORCH_MODE=claude) the workers and the verifier are Claude (`claude -p`) instead.
+# The /orchestra Claude Code skill drives this; it can also be used by hand.
+#
+# Usage:
+#   orchestra init [dir]            create a run dir under <dir>/.orchestra/ and snapshot the tree
+#   orchestra run <rundir> [round]  run one Codex worker per <rundir>/r<round>/task-*.md in parallel,
+#                                   then one Codex verifier (r<round>/codex-verify.md),
+#                                   then one read-only Codex advisor (r<round>/codex-advice.md)
+#   orchestra setup [opts]          enable Claude + Codex Remote Control and pick the mode (see: orchestra setup --help)
+#   orchestra mode                  print the resolved mode: codex | claude
+#   orchestra diff <rundir> [git-diff-args]  diff from the snapshot to the current tree
+#   orchestra status <rundir> [round]
+#
+# Env (defaults can also live in ${ORCH_CONFIG:-~/.config/orchestra/config.env}, written by `orchestra setup --mode`):
+#   ORCH_MODE          auto (default) | codex | claude
+#                      auto: codex if installed and logged in, else claude. claude: Claude-only workers/verifier
+#   ORCH_CLAUDE_MODEL  claude-only mode: model for workers/verifier (default claude-sonnet-5-5)
+#   ORCH_CLAUDE_EFFORT claude-only mode: effort (default high)
+#   ORCH_CODEX_MODEL   codex model override (default: ~/.codex/config.toml)
+#   ORCH_CODEX_EFFORT  codex reasoning effort override (default: config)
+#   ORCH_CODEX_ADVISOR model of the read-only Codex advisor that reviews the Codex verifier (default gpt-6-astra; 'off' = skip)
+#   ORCH_CODEX_ADVISOR_EFFORT  advisor reasoning effort (default medium)
+#   ORCH_CODEX_VERIFY  1 = run the Codex verify phase after the workers (default 1)
+#   ORCH_TIMEOUT       per-worker timeout in seconds (default 3600)
+#   ORCH_NETWORK       1 = allow network inside the codex sandbox (default 1)
+#   ORCH_BACKEND       auto (default) | daemon | exec
+#                      daemon: threads on the local Codex app-server daemon, visible in Codex Remote Control
+#                      exec:   standalone `codex exec` (not visible in Remote Control)
+#                      auto:   daemon if reachable, else exec
+#   ORCH_GRACE         daemon backend: seconds to wait for a follow-up turn after an interrupt (default 600)
+set -euo pipefail
+
+die() { echo "orchestra: $*" >&2; exit 1; }
+
+DAEMON_WORKER=${ORCH_DAEMON_WORKER:-/usr/local/lib/orchestra/daemon_worker.py}
+
+# User defaults (written by `orchestra setup`). Entries use `: "${VAR:=value}"`, so real env vars win.
+CODEX_HOME_DIR=${CODEX_HOME:-$HOME/.codex}
+CONFIG=${ORCH_CONFIG:-$HOME/.config/orchestra/config.env}
+# shellcheck disable=SC1090
+[[ -f $CONFIG ]] && source "$CONFIG"
+
+# Sets MODE (codex|claude) and MODE_WHY.
+resolve_mode() {
+  local want=${ORCH_MODE:-auto} why=""
+  case $want in auto | codex | claude) ;; *) die "ORCH_MODE must be auto, codex or claude" ;; esac
+  if [[ $want == claude ]]; then
+    MODE=claude MODE_WHY="ORCH_MODE=claude"
+    return
+  fi
+  if ! command -v codex >/dev/null 2>&1; then why="codex is not installed"
+  elif ! codex login status >/dev/null 2>&1; then why="codex is not logged in (run: codex login)"
+  fi
+  if [[ -z $why ]]; then
+    MODE=codex MODE_WHY="codex available"
+  elif [[ $want == codex ]]; then
+    die "ORCH_MODE=codex but $why"
+  else
+    MODE=claude MODE_WHY="$why; falling back to Claude-only"
+  fi
+}
+
+# Write the full working tree (tracked + untracked, honoring .gitignore) as a
+# git tree object without touching the real index. Prints the tree hash.
+snapshot_tree() {
+  local root=$1 idx
+  idx=$(mktemp)
+  rm -f "$idx"
+  (cd "$root" && GIT_INDEX_FILE=$idx git add -A -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/*.pyc' ':(exclude,glob)**/.DS_Store' >/dev/null 2>&1 && GIT_INDEX_FILE=$idx git write-tree)
+  rm -f "$idx"
+}
+
+load_run() {
+  RUN=$(cd "${1:?rundir required}" && pwd) || die "no such run dir: $1"
+  [[ -f $RUN/meta.env ]] || die "$RUN is not an orchestra run dir"
+  # shellcheck disable=SC1091
+  source "$RUN/meta.env"
+}
+
+cmd_init() {
+  local dir root id
+  dir=$(cd "${1:-.}" && pwd)
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) \
+    || die "$dir is not a git repo (run 'git init' first; the snapshot/diff needs git)"
+  id=$(date +%Y%m%d-%H%M%S)
+  RUN=$root/.orchestra/$id
+  mkdir -p "$RUN/r1"
+  # Keep run artifacts out of git status / diffs.
+  local excl
+  excl=$(git -C "$root" rev-parse --git-path info/exclude)
+  [[ $excl = /* ]] || excl=$root/$excl
+  mkdir -p "$(dirname "$excl")"
+  grep -qxF '.orchestra/' "$excl" 2>/dev/null || echo '.orchestra/' >>"$excl"
+  cat >"$RUN/meta.env" <<EOF
+ROOT=$(printf %q "$root")
+ID=$id
+BASE_TREE=$(snapshot_tree "$root")
+BASE_HEAD=$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)
+EOF
+  echo "$RUN"
+}
+
+worker_prompt() {
+  local n=$1 total=$2 task=$3
+  cat <<EOF
+You are $AGENT worker $n of $total. All $total workers run AT THE SAME TIME in the SAME directory ($ROOT),
+each on a different task from one shared plan.
+
+1. Read the overall plan: $RUN/plan.md
+2. Read YOUR task: $task
+3. Implement your task completely.
+
+Hard rules (other workers are editing this folder right now):
+- Only create/modify/delete files listed in your task's "Owned files" section. Treat every other file as read-only.
+  If you truly need a change outside your files, do NOT make it; describe it under "Needs from others" in your final message.
+- Follow the shared interfaces/contracts in plan.md exactly, even if the other side isn't written yet.
+- Never run git commands that change state (commit, checkout, switch, reset, stash, clean, rebase, merge, add).
+- Never run repo-wide formatters/linters with --fix, and never delete or regenerate lockfiles unless your task says so.
+- Run only the tests/checks for your own part; failures in files you don't own are not yours to fix.
+- If the same check fails twice, stop patching symptoms: find the root cause or report it as blocked.
+
+Final message (keep it short, in this shape):
+## Worker $n result
+- Status: done | partial | blocked
+- Files changed: ...
+- How I verified: ...
+- Needs from others / open issues: ...
+EOF
+}
+
+verify_prompt() {
+  local round=$1 dir=$RUN/r$1
+  cat <<EOF
+You are the $AGENT verifier for round $round of an orchestrated change in $ROOT.
+Several $AGENT workers just implemented one shared plan in parallel. They are all finished; nobody else is editing now.
+
+Inputs:
+- Plan (goal, shared interfaces, acceptance criteria): $RUN/plan.md
+- Tasks with owned files: $dir/task-*.md
+- Worker reports: $dir/logs/task-*.last.md
+- Changes since the baseline: $dir/changes.stat and $dir/changes.diff (read these; don't regenerate them with git)
+
+Do:
+1. Check the pieces fit: shared interfaces match on both sides, imports resolve, no stubs/TODOs left, no file changed outside every task's owned list.
+2. Run the project's real build/typecheck/tests/lint and every acceptance-criteria command from plan.md.
+3. You MAY fix small integration defects (wrong import, interface mismatch between two tasks, glue code making a test fail).
+   Keep fixes minimal; no redesign, no new features. Report anything bigger instead of fixing it.
+4. If you fixed something, re-run the affected checks.
+
+Rules: never run state-changing git commands; never reformat the repo; never delete or regenerate lockfiles.
+
+Final message, in this exact shape (it is saved as the verification report):
+# $AGENT verification: PASS | FAIL
+## Acceptance criteria
+- [PASS|FAIL|UNVERIFIED] <criterion> — evidence (command → result, or file:line)
+## Checks run
+- \`cmd\` → result
+## Fixes I made
+- file — what and why (or "none")
+## Remaining issues
+1. [high|medium|low] file:line — problem / suggested fix
+EOF
+}
+
+advisor_prompt() {
+  local round=$1 dir=$RUN/r$1
+  cat <<EOF
+You are the senior Codex advisor for round $round in $ROOT. You are READ-ONLY: never edit files, never run state-changing commands.
+Workers implemented a shared plan in parallel, then a Codex verifier checked and possibly patched the result. Your job is to catch what they missed. Be decisive and brief.
+
+Read: $RUN/plan.md, $dir/task-*.md, $dir/logs/task-*.last.md, $dir/codex-verify.md, $dir/changes.diff (taken before the verifier's fixes; for the current state run: orchestra diff $RUN).
+
+Look for, without repeating routine checks:
+- invariants the change breaks (auth, data/schema contracts, public API compatibility, config/secrets)
+- hidden regressions: behavior changed outside task scope, weakened checks, swallowed errors
+- contract mismatches between tasks or against existing callers
+- ownership violations, stray debug code, secrets
+- tests that pass for the wrong reason (mocks hiding logic, tautological asserts, skips)
+- verifier fixes that changed behavior instead of fixing glue; verifier claims you cannot confirm
+Run a command only to confirm a specific suspicion.
+
+Final message, exact shape (saved as the report):
+# Codex advisor: AGREE | CONCERNS
+## Disagreements with the verifier
+- ... (or "none")
+## Issues
+1. [high|medium|low] file:line: problem / suggested fix / owner task-N
+EOF
+}
+
+# Shell command (string) that runs one Codex job with the chosen backend.
+codex_cmd() {
+  local logbase=$1 tname=$2 model=${3:-${ORCH_CODEX_MODEL:-}} effort=${4:-${ORCH_CODEX_EFFORT:-}} sandbox=${5:-workspace-write}
+  if [[ $BACKEND == claude ]]; then
+    local a=(timeout "${ORCH_TIMEOUT:-3600}" claude -p --model "${ORCH_CLAUDE_MODEL:-claude-sonnet-5-5}" --effort "${ORCH_CLAUDE_EFFORT:-high}"
+      --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash)
+    echo "$(printf '%q ' "${a[@]}") < $(printf %q "$logbase.prompt") 2> $(printf %q "$logbase.err") | tee $(printf %q "$logbase.last.md")"
+  elif [[ $BACKEND == daemon ]]; then
+    local a=(python3 "$DAEMON_WORKER" --cwd "$ROOT" --prompt-file "$logbase.prompt" --last-file "$logbase.last.md"
+      --thread-file "$logbase.thread" --name "$tname"
+      --timeout "${ORCH_TIMEOUT:-3600}" --grace "${ORCH_GRACE:-600}")
+    [[ ${ORCH_NETWORK:-1} == 1 ]] && a+=(--network)
+    a+=(--sandbox "$sandbox")
+    [[ -n $model ]] && a+=(--model "$model")
+    [[ -n $effort ]] && a+=(--effort "$effort")
+    echo "$(printf '%q ' "${a[@]}") < /dev/null"
+  else
+    local a=(timeout "${ORCH_TIMEOUT:-3600}" codex exec -C "$ROOT" -s "$sandbox" -c 'approval_policy="never"' --color never)
+    [[ ${ORCH_NETWORK:-1} == 1 && $sandbox == workspace-write ]] && a+=(-c 'sandbox_workspace_write.network_access=true')
+    [[ -n $model ]] && a+=(-m "$model")
+    [[ -n $effort ]] && a+=(-c "model_reasoning_effort=\"$effort\"")
+    echo "$(printf '%q ' "${a[@]}" -o "$logbase.last.md" -) < $(printf %q "$logbase.prompt")"
+  fi
+}
+
+# Open a tmux window running one Codex job; writes <logbase>.log and <logbase>.exit.
+launch() {
+  local name=$1 logbase=$2 tname=$3 inner script
+  rm -f "$logbase.last.md" "$logbase.thread" "$logbase.exit"
+  inner=$(codex_cmd "$logbase" "$tname" "${4:-}" "${5:-}" "${6:-workspace-write}")
+  script="set -o pipefail; $inner 2>&1 | tee $(printf %q "$logbase.log"); echo \${PIPESTATUS[0]} > $(printf %q "$logbase.exit"); echo; echo '[finished - press enter]'; read -r _"
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-window -t "$SESSION" -n "$name" -c "$ROOT" "bash -c $(printf %q "$script")"
+  else
+    tmux new-session -d -s "$SESSION" -n "$name" -c "$ROOT" "bash -c $(printf %q "$script")"
+  fi
+}
+
+# Wait until every given <logbase>.exit exists.
+wait_for() {
+  local label=$1 total done_count last=-1 start=$SECONDS b
+  shift
+  total=$#
+  while :; do
+    done_count=0
+    for b in "$@"; do [[ -f $b.exit ]] && done_count=$((done_count + 1)); done
+    if ((done_count != last)); then
+      echo "[$(date +%H:%M:%S)] $label: $done_count/$total finished ($(((SECONDS - start) / 60))m)"
+      last=$done_count
+    fi
+    ((done_count == total)) && return 0
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+      echo "tmux session $SESSION disappeared before $label finished" >&2
+      return 1
+    fi
+    sleep 10
+  done
+}
+
+cmd_run() {
+  load_run "$1"
+  local round=${2:-1} dir tasks=() bases=() n=0 total repo
+  dir=$RUN/r$round
+  shopt -s nullglob
+  tasks=("$dir"/task-*.md)
+  shopt -u nullglob
+  total=${#tasks[@]}
+  ((total > 0)) || die "no task-*.md in $dir"
+  mkdir -p "$dir/logs"
+  rm -f "$dir"/logs/*.exit "$dir/codex-verify.md" "$dir/codex-advice.md"
+  repo=$(basename "$ROOT")
+
+  resolve_mode
+  AGENT=Codex
+  BACKEND=${ORCH_BACKEND:-auto}
+  if [[ $MODE == claude ]]; then
+    BACKEND=claude AGENT=Claude
+  elif [[ $BACKEND == auto ]]; then
+    if python3 "$DAEMON_WORKER" --probe 2>/dev/null; then BACKEND=daemon; else BACKEND=exec; fi
+  fi
+  [[ $BACKEND == daemon || $BACKEND == exec || $BACKEND == claude ]] || die "ORCH_BACKEND must be auto, daemon or exec"
+  echo "mode: $MODE ($MODE_WHY)"
+  if [[ $BACKEND == claude ]]; then
+    command -v claude >/dev/null || die "claude not found"
+    echo "backend: claude - workers/verifier are 'claude -p' (${ORCH_CLAUDE_MODEL:-claude-sonnet-5-5}); not visible in Remote Control, watch via tmux/logs"
+  elif [[ $BACKEND == daemon ]]; then
+    python3 "$DAEMON_WORKER" --probe || die "codex app-server daemon unreachable (codex app-server daemon start)"
+    echo "backend: daemon - jobs appear in Codex Remote Control as '[orch $repo r$round] ...'"
+  else
+    echo "backend: exec - not visible in Codex Remote Control"
+  fi
+  echo "$BACKEND" >"$dir/logs/backend"
+
+  SESSION=orch-$ID-r$round
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  echo "tmux session: $SESSION (watch: tmux attach -t $SESSION)"
+
+  # Phase 1: parallel workers.
+  for task in "${tasks[@]}"; do
+    n=$((n + 1))
+    local name base title
+    name=$(basename "$task" .md)
+    base=$dir/logs/$name
+    bases+=("$base")
+    title=$(grep -m1 '^#' "$task" | sed -E 's/^#* *//; s/^[Tt]ask[ _-]?[0-9]+[:.)]? *//' | cut -c1-60)
+    worker_prompt "$n" "$total" "$task" >"$base.prompt"
+    launch "$name" "$base" "[orch $repo r$round] $name: ${title:-$name}"
+  done
+  wait_for "workers" "${bases[@]}" || true
+
+  # Phase 2: Codex verification of the combined result.
+  if [[ ${ORCH_CODEX_VERIFY:-1} == 1 ]]; then
+    local vbase=$dir/logs/verify
+    cmd_diff "$RUN" --stat >"$dir/changes.stat" || true
+    cmd_diff "$RUN" >"$dir/changes.diff" || true
+    verify_prompt "$round" >"$vbase.prompt"
+    launch verify "$vbase" "[orch $repo r$round] verify"
+    wait_for "codex verify" "$vbase" || true
+    [[ -f $vbase.last.md ]] && cp "$vbase.last.md" "$dir/codex-verify.md"
+    # Phase 3: read-only Codex advisor (different model) reviews the verifier, like the Opus advisor does for Claude.
+    local amodel=${ORCH_CODEX_ADVISOR-gpt-6-astra}
+    if [[ $BACKEND != claude && -n $amodel && $amodel != off && -f $dir/codex-verify.md ]]; then
+      local abase=$dir/logs/advisor
+      advisor_prompt "$round" >"$abase.prompt"
+      launch advisor "$abase" "[orch $repo r$round] advisor ($amodel)" "$amodel" "${ORCH_CODEX_ADVISOR_EFFORT:-medium}" read-only
+      wait_for "codex advisor" "$abase" || true
+      [[ -f $abase.last.md ]] && cp "$abase.last.md" "$dir/codex-advice.md"
+    fi
+  fi
+
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  cmd_status "$RUN" "$round"
+}
+
+cmd_status() {
+  load_run "$1"
+  local round=${2:-1} dir rc=0 b
+  dir=$RUN/r$round
+  echo "== run $ID round $round ($ROOT) backend=$(cat "$dir/logs/backend" 2>/dev/null || echo ?)"
+  for b in "$dir"/task-*.md verify advisor; do
+    local name ex tid
+    name=$(basename "$b" .md)
+    [[ $name == verify && ! -f $dir/logs/verify.prompt ]] && continue
+    [[ $name == advisor && ! -f $dir/logs/advisor.prompt ]] && continue
+    ex=$(cat "$dir/logs/$name.exit" 2>/dev/null || echo running/missing)
+    tid=$(cat "$dir/logs/$name.thread" 2>/dev/null || true)
+    echo "-- $name: exit=$ex  log=$dir/logs/$name.log${tid:+  codex-thread=$tid}"
+    [[ $ex == 0 ]] || rc=1
+    if [[ $name == advisor ]]; then
+      [[ -f $dir/codex-advice.md ]] && echo "   report: $dir/codex-advice.md ($(head -1 "$dir/codex-advice.md"))"
+    elif [[ $name == verify ]]; then
+      [[ -f $dir/codex-verify.md ]] && echo "   report: $dir/codex-verify.md ($(head -1 "$dir/codex-verify.md"))"
+    elif [[ -f $dir/logs/$name.last.md ]]; then
+      sed 's/^/   /' "$dir/logs/$name.last.md"
+      echo
+    fi
+  done
+  echo "== changed files since snapshot"
+  cmd_diff "$RUN" --stat || true
+  return $rc
+}
+
+cmd_setup() {
+  local do_claude=1 do_codex=1 mode="" name dir=$HOME
+  name=$(hostname)
+  while (($#)); do
+    case $1 in
+      --no-claude-rc) do_claude=0 ;;
+      --no-codex-rc) do_codex=0 ;;
+      --no-rc) do_claude=0 do_codex=0 ;;
+      --mode) mode=${2:?--mode needs auto|codex|claude}; shift ;;
+      --name) name=${2:?}; shift ;;
+      --dir) dir=${2:?}; shift ;;
+      -h | --help | *)
+        cat <<EOF
+orchestra setup [options]   (default: enable both Remote Controls, keep the current mode)
+  --mode auto|codex|claude  save the default mode (auto: Codex if installed+logged in, else Claude-only; claude: never use Codex)
+  --no-claude-rc            don't start Claude Remote Control
+  --no-codex-rc             don't start Codex Remote Control
+  --no-rc                   skip both
+  --name NAME               Claude Remote Control name (default: hostname)
+  --dir DIR                 Claude Remote Control working dir (default: \$HOME)
+EOF
+        [[ $1 == -h || $1 == --help ]] && return 0 || return 2 ;;
+    esac
+    shift
+  done
+
+  if [[ -n $mode ]]; then
+    case $mode in auto | codex | claude) ;; *) die "--mode must be auto, codex or claude" ;; esac
+    mkdir -p "$(dirname "$CONFIG")"
+    echo ": \"\${ORCH_MODE:=$mode}\"" >"$CONFIG"
+    echo "saved default mode '$mode' in $CONFIG"
+    ORCH_MODE=$mode
+  fi
+
+  if ((do_claude)); then
+    if ! command -v claude >/dev/null 2>&1; then
+      echo "claude RC: skipped (claude not installed)"
+    elif tmux has-session -t rc 2>/dev/null || systemctl is-active --quiet claude-rc 2>/dev/null; then
+      echo "claude RC: already running (tmux session 'rc')"
+    else
+      tmux new-session -d -s rc -c "$dir" "claude remote-control --name $(printf %q "$name")"
+      sleep 4
+      if tmux has-session -t rc 2>/dev/null; then
+        echo "claude RC: started in tmux session 'rc' as '$name' (tmux attach -t rc). If it waits on a trust/login prompt, attach and answer it once."
+        echo "           to survive reboots, wrap it in a systemd unit (see README)."
+      else
+        echo "claude RC: exited right away - run 'claude remote-control --name $name' once by hand (login / trust prompt) and rerun setup" >&2
+      fi
+    fi
+  fi
+
+  if ((do_codex)); then
+    if [[ ${ORCH_MODE:-auto} == claude ]]; then
+      echo "codex RC: skipped (mode=claude)"
+    elif ! command -v codex >/dev/null 2>&1; then
+      echo "codex RC: skipped (codex not installed) - orchestra will run Claude-only"
+    elif ! codex login status >/dev/null 2>&1; then
+      echo "codex RC: skipped (codex not logged in: run 'codex login')" >&2
+    elif python3 "$DAEMON_WORKER" --probe 2>/dev/null &&
+      grep -q '"remoteControlEnabled": *true' "$CODEX_HOME_DIR/app-server-daemon/settings.json" 2>/dev/null; then
+      echo "codex RC: already enabled"
+    else
+      codex remote-control start && echo "codex RC: enabled" || echo "codex RC: failed to start (codex remote-control start)" >&2
+    fi
+  fi
+
+  resolve_mode
+  echo "mode: $MODE ($MODE_WHY)"
+}
+
+cmd_diff() {
+  load_run "$1"
+  shift
+  local now
+  now=$(snapshot_tree "$ROOT")
+  git -C "$ROOT" diff "$@" "$BASE_TREE" "$now"
+}
+
+case ${1:-} in
+  init) shift; cmd_init "$@" ;;
+  run) shift; cmd_run "$@" ;;
+  setup) shift; cmd_setup "$@" ;;
+  mode) resolve_mode; echo "mode: $MODE"; echo "reason: $MODE_WHY" ;;
+  diff) shift; cmd_diff "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
