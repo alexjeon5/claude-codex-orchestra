@@ -1,5 +1,7 @@
 # orchestra
 
+**English** · [한국어](README.ko.md)
+
 Claude plans, Codex builds and verifies, Claude checks — in one command: `/orchestra <task>`.
 
 ```
@@ -11,7 +13,7 @@ No Codex? The workers and the verifier become `claude -p` runs (Claude-only mode
 
 ## Install
 ```bash
-git clone <this repo> orchestra && cd orchestra
+git clone git@github.com:alexjeon5/claude-codex-orchestra.git && cd claude-codex-orchestra
 ./install.sh                  # asks how to behave without Codex
 ./install.sh --mode claude    # Claude-only, never touch Codex
 ./install.sh --no-rc          # don't start Remote Control
