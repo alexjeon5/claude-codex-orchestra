@@ -6,7 +6,7 @@ Claude가 계획하고, Codex가 구현·검증하고, Claude가 최종 확인�
 
 ```
 Haiku 탐색 → Sonnet 계획 → Opus 계획 검토 → 사용자 승인
-  → Codex ×3 구현(병렬, 같은 폴더) → Codex 검증 → (선택: Codex advisor, astra)
+  → Codex ×N 구현(N은 Claude가 판단, 병렬, 같은 폴더) → Codex 검증 → (선택: Codex advisor, astra)
   → Sonnet 재확인 → Opus 최종 검토
 ```
 Codex가 없으면 worker와 verifier가 `claude -p`로 대체됩니다(Claude-only 모드).
@@ -44,7 +44,7 @@ Claude-only 작업은 헤드리스 `claude -p`라 Remote Control에는 보이지
 ## 옵션 (환경변수)
 `ORCH_MODE`, `ORCH_CLAUDE_MODEL`(claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT`(high), `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`,
 `ORCH_CODEX_ADVISOR`(기본 꺼짐, `on`이면 gpt-6-astra, 모델명도 가능), `ORCH_CODEX_ADVISOR_EFFORT`(medium), `ORCH_CODEX_VERIFY`(1),
-`ORCH_TIMEOUT`(3600), `ORCH_NETWORK`(1), `ORCH_BACKEND`(auto|daemon|exec), `ORCH_GRACE`(600).
+`ORCH_MAX_WORKERS`(6), `ORCH_TIMEOUT`(3600), `ORCH_NETWORK`(1), `ORCH_BACKEND`(auto|daemon|exec), `ORCH_GRACE`(600).
 
 ## 재부팅 후에도 Claude Remote Control 유지(선택)
 `tmux new-session -d -s rc -c <dir> 'claude remote-control --name <name>'`을 systemd unit(`Type=forking`, `Restart=on-failure`)으로 감싸세요.

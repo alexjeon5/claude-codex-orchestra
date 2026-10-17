@@ -6,7 +6,7 @@ Claude plans, Codex builds and verifies, Claude checks — in one command: `/orc
 
 ```
 Haiku scouts → Sonnet plan → Opus plan review → you approve
-  → Codex ×3 build (parallel, same folder) → Codex verify → (opt-in: Codex advisor, astra)
+  → Codex ×N build (N chosen by Claude, parallel, same folder) → Codex verify → (opt-in: Codex advisor, astra)
   → Sonnet re-check → Opus final review
 ```
 No Codex? The workers and the verifier become `claude -p` runs (Claude-only mode).
@@ -43,7 +43,7 @@ Claude-only jobs are headless `claude -p`: not visible in Remote Control (use `t
 ## Options (env)
 `ORCH_MODE`, `ORCH_CLAUDE_MODEL` (claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT` (high), `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`,
 `ORCH_CODEX_ADVISOR` (off by default; `on` = gpt-6-astra, or a model name), `ORCH_CODEX_ADVISOR_EFFORT` (medium), `ORCH_CODEX_VERIFY` (1),
-`ORCH_TIMEOUT` (3600), `ORCH_NETWORK` (1), `ORCH_BACKEND` (auto|daemon|exec), `ORCH_GRACE` (600).
+`ORCH_MAX_WORKERS` (6), `ORCH_TIMEOUT` (3600), `ORCH_NETWORK` (1), `ORCH_BACKEND` (auto|daemon|exec), `ORCH_GRACE` (600).
 
 ## Keep Claude Remote Control alive across reboots (optional)
 Wrap `tmux new-session -d -s rc -c <dir> 'claude remote-control --name <name>'` in a systemd unit

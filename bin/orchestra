@@ -23,6 +23,7 @@
 #   ORCH_CODEX_ADVISOR opt-in read-only Codex advisor that reviews the Codex verifier. Unset/off = no advisor (default); 'on' = gpt-6-astra; or a model name
 #   ORCH_CODEX_ADVISOR_EFFORT  advisor reasoning effort (default medium)
 #   ORCH_CODEX_VERIFY  1 = run the Codex verify phase after the workers (default 1)
+#   ORCH_MAX_WORKERS   max number of parallel workers per round (default 6); the number of r<N>/task-*.md files decides how many run
 #   ORCH_TIMEOUT       per-worker timeout in seconds (default 3600)
 #   ORCH_NETWORK       1 = allow network inside the codex sandbox (default 1)
 #   ORCH_BACKEND       auto (default) | daemon | exec
@@ -258,6 +259,8 @@ cmd_run() {
   shopt -u nullglob
   total=${#tasks[@]}
   ((total > 0)) || die "no task-*.md in $dir"
+  ((total <= ${ORCH_MAX_WORKERS:-6})) || die "$total tasks in $dir exceed ORCH_MAX_WORKERS=${ORCH_MAX_WORKERS:-6}; merge tasks or raise the limit"
+  mapfile -t tasks < <(printf '%s\n' "${tasks[@]}" | sort -V)
   mkdir -p "$dir/logs"
   rm -f "$dir"/logs/*.exit "$dir/codex-verify.md" "$dir/codex-advice.md"
   repo=$(basename "$ROOT")

@@ -1,6 +1,6 @@
 ---
 name: orchestra
-description: Pipeline - Sonnet 5.5 leads, Haiku 5.5 scouts explore, Opus advises at 3 checkpoints, 3 parallel Codex workers code in the same folder, Codex verifies, then Claude checks. Use when the user runs /orchestra or asks to work "with Codex" ("Codex랑 같이", "오케스트라로").
+description: Pipeline - Sonnet 5.5 leads, Haiku 5.5 scouts explore, Opus advises at 3 checkpoints, a flexible number of parallel Codex workers (chosen by Claude) code in the same folder, Codex verifies, then Claude checks. Use when the user runs /orchestra or asks to work "with Codex" ("Codex랑 같이", "오케스트라로").
 argument-hint: <만들 기능/작업 설명>
 model: claude-sonnet-5-5
 effort: high
@@ -27,21 +27,39 @@ Context budget: keep your own context lean. Delegate exploration to scouts. Read
 - Use their summaries. Open files yourself only to settle specific doubts.
 
 ## 2. Plan (you)
-- Split the work into exactly 3 Codex tasks (fewer if 3 would be forced; tell the user). Each task file = one Codex worker.
+- Decide the worker count N yourself, from the work. Each `task-*.md` = one Codex worker running in parallel (max `ORCH_MAX_WORKERS`, default 6).
+  - N = the number of truly independent, file-disjoint chunks. One tightly coupled change → 1 worker. Don't split just to use more workers: every worker costs startup + context, and every extra boundary is another contract that can break.
+  - Rough guide: tiny/single-file or tangled change → 1; a few separable parts (e.g. backend / frontend / tests) → 2–3; many independent modules or files → 4–6.
+  - Split along file ownership, not along steps. If two parts need the same file or must run in sequence, merge them or put the sequential part in a later round.
+  - Tell the user the chosen N and why in one line at approval time.
 - The workers edit the same folder concurrently, so:
   - Owned files never overlap between tasks. Each shared touchpoint (router, index exports, package.json, ...) belongs to exactly one task.
   - Write every cross-task contract (signatures, schemas, types, paths) into "Shared interfaces" in plan.md.
 - Write these files in English, concrete and unambiguous:
-  - `RUN/plan.md`: goal, context, shared interfaces, invariants that must not break, task split, **acceptance criteria** (a checkable list with exact commands), out of scope.
-  - `RUN/r1/task-{1..3}.md`: title, goal, **Owned files** (marked new/modify), implementation details, read-only references, self-check commands, done criteria.
+  - `RUN/plan.md`: goal, context, shared interfaces, invariants that must not break, task split (N and why), **acceptance criteria** (a checkable list with exact commands), out of scope.
+  - `RUN/r1/task-{1..N}.md`: title, goal, **Owned files** (marked new/modify), implementation details, read-only references, self-check commands, done criteria.
 
 ## 3. Checkpoint A: advisor plan-review
 - Call `orchestra-advisor` with: `mode: plan-review, RUN=<path>`, plus a 3-line summary of the risks you're unsure about.
 - If it says REVISE, apply the edits you agree with. If you reject one, note why in your summary to the user.
 
 ## 4. Approval (user)
-- Show a short summary: goal, one line per task plus its owned files, acceptance criteria, the advisor's verdict, and file paths.
-- Ask with `AskUserQuestion`. Options: "승인하고 Codex 실행" / "수정 필요" / "취소". On 수정 필요, revise (re-run A only if the change is structural), then ask again. Never run Codex without approval.
+First print the plan as normal chat text (in Korean), BEFORE calling `AskUserQuestion`. The user must be able to read it in the conversation. Don't just point to files.
+- Overview: goal, worker count N and why, acceptance criteria (with the commands), the advisor's verdict, and the RUN path.
+- Then one block per worker, in this shape:
+  ```
+  ### Worker k: <title>
+  - 목표: ...
+  - 담당 파일(Owned files): path (신규/수정), ...
+  - 할 일: 3–6 bullets of the key implementation steps
+  - 의존/인터페이스: what it relies on from other workers (the shared contracts)
+  - 자기 검증: the commands it runs
+  ```
+- Mention who touches the shared touchpoints (router, index, package.json, ...), and the Claude-only mode if it applies.
+Only after that, ask with `AskUserQuestion`: "이 계획으로 실행할까?" with options "승인하고 Codex 실행" (Claude-only mode: "승인하고 실행") / "수정 필요" / "취소".
+- 수정 필요: apply the feedback, print the changed worker blocks (or the whole plan if the split changed), re-run A only if the change is structural, then ask again.
+- 취소: stop. Leave RUN in place.
+- Never run Codex without approval. A worker plan the user hasn't seen in chat is not approved.
 
 ## 5. Codex build + Codex verify
 - Run `orchestra run <RUN> <round>` via Bash with `run_in_background: true`. You get a notification when it exits. Don't poll.
@@ -65,7 +83,7 @@ Context budget: keep your own context lean. Delegate exploration to scouts. Read
 
 ## 8. Fix rounds (on FAIL)
 - Checkpoint B: if the same acceptance criterion or issue failed in two consecutive rounds, call `orchestra-advisor` with `mode: stuck, RUN=<path>, round=<N>` and the failing output BEFORE you write the next tasks. Follow its root-cause call, or stop and ask the user if it says so.
-- Write `RUN/r<N+1>/task-*.md` (1–3 tasks, owned files still not overlapping). Get approval as in step 4, then repeat steps 5–7.
+- Write `RUN/r<N+1>/task-*.md` (N is again your call, as in step 2; owned files still not overlapping). Get approval as in step 4, then repeat steps 5–7.
 - At most 2 fix rounds (up to r3). If it still fails, hand the remaining issues to the user.
 
 ## Finish
