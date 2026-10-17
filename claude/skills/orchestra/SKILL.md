@@ -10,7 +10,7 @@ effort: high
 
 Request: $ARGUMENTS
 
-Roles: you (Sonnet 5.5) lead and decide. `orchestra-scout` (Haiku 5.5) explores. `orchestra-advisor` (Opus) is on call ONLY at checkpoints A/B/C. Codex writes the code (gpt-6.1-sol) and verifies it first, with a read-only `gpt-6-astra` advisor on top; Claude checks last.
+Roles: you (Sonnet 5.5) lead and decide. `orchestra-scout` (Haiku 5.5) explores. `orchestra-advisor` (Opus) is on call ONLY at checkpoints A/B/C. Codex writes the code (gpt-6.1-sol) and verifies it first; Claude checks last. A read-only `gpt-6-astra` Codex advisor on top of the verifier is OPT-IN: only when the user explicitly asks for astra / a stronger Codex review.
 CLI: `orchestra init|run|diff|status`. Talk to the user in Korean (반말).
 Context budget: keep your own context lean. Delegate exploration to scouts. Read only the files you must reason about. Never call the advisor outside A/B/C.
 
@@ -47,19 +47,19 @@ Context budget: keep your own context lean. Delegate exploration to scouts. Read
 - Run `orchestra run <RUN> <round>` via Bash with `run_in_background: true`. You get a notification when it exits. Don't poll.
   - Phase 1: the workers run in parallel.
   - Phase 2: one Codex verifier reviews the combined result, runs the build/tests/acceptance commands, may fix small integration glue, and writes `r<N>/codex-verify.md`.
-  - Phase 3: a read-only Codex advisor (`gpt-6-astra`, a different model from the writers) reviews the verifier's work and writes `r<N>/codex-advice.md` (AGREE | CONCERNS). Skipped with `ORCH_CODEX_ADVISOR=off`.
+  - Phase 3 (OPT-IN, off by default): a read-only Codex advisor (`gpt-6-astra`) reviews the verifier's work and writes `r<N>/codex-advice.md` (AGREE | CONCERNS). Enable it ONLY if the user explicitly asked for astra / an extra Codex advisor review, by running `ORCH_CODEX_ADVISOR=on orchestra run …` (or `ORCH_CODEX_ADVISOR=<model>`). Never enable it on your own.
 - (Claude-only mode: jobs are headless `claude -p`, NOT visible in Remote Control. Watch via tmux `orch-<id>-r<N>` and `RUN/r<N>/logs/`; stderr is in `*.err`. Skip the Remote Control notes below.)
 - Default backend is the Codex daemon. Jobs show in Codex Remote Control as `[orch <repo> r<N>] task-N: …` and `[orch <repo> r<N>] verify`. If the run fell back to exec (see the first line `backend:`), they aren't visible there. Tell the user where to watch: the Remote Control names, the tmux session `orch-<id>-r<N>`, and `RUN/r<N>/logs/`.
 - The user may interrupt or steer jobs from the Codex app. An interrupted job waits `ORCH_GRACE` (600s) for a follow-up, else exits 130.
 - Exit codes: 0 ok, 1 failed, 2 daemon error, 124 timeout, 130 interrupted.
 
 ## 6. Claude check (you)
-- Read `codex-verify.md`, `codex-advice.md`, and the diff stat. Treat advisor CONCERNS as leads to check, not verdicts.
+- Read `codex-verify.md`, `codex-advice.md` (only exists if phase 3 ran), and the diff stat. Treat advisor CONCERNS as leads to check, not verdicts.
 - Re-run the acceptance-criteria commands yourself and compare the results with Codex's claims. Look at the diff for any file Codex reported fixing.
 - If the results clearly FAIL, skip C and go to step 8. If they look PASS, continue to C.
 
 ## 7. Checkpoint C: advisor final-review
-- Call `orchestra-advisor` with: `mode: final-review, RUN=<path>, round=<N>`, your step-6 command results, any worker failures, and the Codex advisor verdict (`r<N>/codex-advice.md`).
+- Call `orchestra-advisor` with: `mode: final-review, RUN=<path>, round=<N>`, your step-6 command results, any worker failures, and the Codex advisor verdict if phase 3 ran (`r<N>/codex-advice.md`).
 - It writes `RUN/r<N>/verify.md` with the final verdict.
 - Report to the user: verdict, acceptance criteria results, the main issues, where Codex, the Codex advisor, and Claude disagreed, changed files, and report paths.
 

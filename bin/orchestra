@@ -20,7 +20,7 @@
 #   ORCH_CLAUDE_EFFORT claude-only mode: effort (default high)
 #   ORCH_CODEX_MODEL   codex model override (default: ~/.codex/config.toml)
 #   ORCH_CODEX_EFFORT  codex reasoning effort override (default: config)
-#   ORCH_CODEX_ADVISOR model of the read-only Codex advisor that reviews the Codex verifier (default gpt-6-astra; 'off' = skip)
+#   ORCH_CODEX_ADVISOR opt-in read-only Codex advisor that reviews the Codex verifier. Unset/off = no advisor (default); 'on' = gpt-6-astra; or a model name
 #   ORCH_CODEX_ADVISOR_EFFORT  advisor reasoning effort (default medium)
 #   ORCH_CODEX_VERIFY  1 = run the Codex verify phase after the workers (default 1)
 #   ORCH_TIMEOUT       per-worker timeout in seconds (default 3600)
@@ -310,7 +310,8 @@ cmd_run() {
     wait_for "codex verify" "$vbase" || true
     [[ -f $vbase.last.md ]] && cp "$vbase.last.md" "$dir/codex-verify.md"
     # Phase 3: read-only Codex advisor (different model) reviews the verifier, like the Opus advisor does for Claude.
-    local amodel=${ORCH_CODEX_ADVISOR-gpt-6-astra}
+    local amodel=${ORCH_CODEX_ADVISOR:-off}
+    [[ $amodel == on ]] && amodel=gpt-6-astra
     if [[ $BACKEND != claude && -n $amodel && $amodel != off && -f $dir/codex-verify.md ]]; then
       local abase=$dir/logs/advisor
       advisor_prompt "$round" >"$abase.prompt"
