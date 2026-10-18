@@ -26,7 +26,7 @@ git clone git@github.com:alexjeon5/claude-codex-orchestra.git && cd claude-codex
 ## 요구 사항
 - Claude Code 2.1.294 이상(Sonnet 5.5 / Haiku 5.5, skill `effort` 지원), 로그인 상태
 - `tmux`, `git`, `python3`
-- 선택: `codex` CLI와 로그인(`codex login`). `gpt-6.1-sol`, `gpt-6-astra`를 쓸 수 있어야 하며 `ORCH_CODEX_MODEL`로 바꿀 수 있습니다. `gpt-6-astra`는 직접 켰을 때만 쓰입니다.
+- 선택: `codex` CLI와 로그인(`codex login`). `gpt-6.1-sol`, `gpt-6-astra`를 쓸 수 있어야 하며 기본은 `gpt-6.1-sol` / `medium`이며 `~/.codex/config.toml`과 무관하게 고정됩니다. `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`로 바꿀 수 있습니다. `gpt-6-astra`는 직접 켰을 때만 쓰입니다.
 
 ## 모드
 | `ORCH_MODE` | 동작 |
@@ -42,7 +42,7 @@ Claude-only 작업은 헤드리스 `claude -p`라 Remote Control에는 보이지
 `orchestra init|run|diff|status|setup|mode`. Remote Control 옵션은 `orchestra setup --help`를 참고하세요.
 
 ## 옵션 (환경변수)
-`ORCH_MODE`, `ORCH_CLAUDE_MODEL`(claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT`(high), `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`,
+`ORCH_MODE`, `ORCH_CLAUDE_MODEL`(claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT`(high), `ORCH_CODEX_MODEL`(gpt-6.1-sol), `ORCH_CODEX_EFFORT`(medium),
 `ORCH_CODEX_ADVISOR`(기본 꺼짐, `on`이면 gpt-6-astra, 모델명도 가능), `ORCH_CODEX_ADVISOR_EFFORT`(medium), `ORCH_CODEX_VERIFY`(1),
 `ORCH_MAX_WORKERS`(6), `ORCH_TIMEOUT`(3600), `ORCH_NETWORK`(1), `ORCH_BACKEND`(auto|daemon|exec), `ORCH_GRACE`(600).
 

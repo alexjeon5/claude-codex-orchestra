@@ -25,7 +25,7 @@ then runs `orchestra setup`, which **starts Claude Remote Control** (tmux sessio
 ## Requirements
 - Claude Code ≥ 2.1.294 (Sonnet 5.5 / Haiku 5.5, skill `effort`), logged in
 - `tmux`, `git`, `python3`
-- Optional: `codex` CLI, logged in (`codex login`) — needs access to `gpt-6.1-sol` and `gpt-6-astra` (override with `ORCH_CODEX_MODEL`; `gpt-6-astra` is only used when you opt in)
+- Optional: `codex` CLI, logged in (`codex login`) — needs access to `gpt-6.1-sol` and `gpt-6-astra` (`gpt-6.1-sol` / `medium` by default, independent of `~/.codex/config.toml`; override with `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`; `gpt-6-astra` is only used when you opt in)
 
 ## Modes
 | `ORCH_MODE` | Behaviour |
@@ -41,7 +41,7 @@ Claude-only jobs are headless `claude -p`: not visible in Remote Control (use `t
 `orchestra init|run|diff|status|setup|mode` — `orchestra setup --help` for RC options.
 
 ## Options (env)
-`ORCH_MODE`, `ORCH_CLAUDE_MODEL` (claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT` (high), `ORCH_CODEX_MODEL`, `ORCH_CODEX_EFFORT`,
+`ORCH_MODE`, `ORCH_CLAUDE_MODEL` (claude-sonnet-5-5), `ORCH_CLAUDE_EFFORT` (high), `ORCH_CODEX_MODEL` (gpt-6.1-sol), `ORCH_CODEX_EFFORT` (medium),
 `ORCH_CODEX_ADVISOR` (off by default; `on` = gpt-6-astra, or a model name), `ORCH_CODEX_ADVISOR_EFFORT` (medium), `ORCH_CODEX_VERIFY` (1),
 `ORCH_MAX_WORKERS` (6), `ORCH_TIMEOUT` (3600), `ORCH_NETWORK` (1), `ORCH_BACKEND` (auto|daemon|exec), `ORCH_GRACE` (600).
 

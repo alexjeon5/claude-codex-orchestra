@@ -18,8 +18,8 @@
 #                      auto: codex if installed and logged in, else claude. claude: Claude-only workers/verifier
 #   ORCH_CLAUDE_MODEL  claude-only mode: model for workers/verifier (default claude-sonnet-5-5)
 #   ORCH_CLAUDE_EFFORT claude-only mode: effort (default high)
-#   ORCH_CODEX_MODEL   codex model override (default: ~/.codex/config.toml)
-#   ORCH_CODEX_EFFORT  codex reasoning effort override (default: config)
+#   ORCH_CODEX_MODEL   codex model for workers + verifier (default gpt-6.1-sol; independent of ~/.codex/config.toml)
+#   ORCH_CODEX_EFFORT  codex reasoning effort for workers + verifier (default medium)
 #   ORCH_CODEX_ADVISOR opt-in read-only Codex advisor that reviews the Codex verifier. Unset/off = no advisor (default); 'on' = gpt-6-astra; or a model name
 #   ORCH_CODEX_ADVISOR_EFFORT  advisor reasoning effort (default medium)
 #   ORCH_CODEX_VERIFY  1 = run the Codex verify phase after the workers (default 1)
@@ -193,7 +193,7 @@ EOF
 
 # Shell command (string) that runs one Codex job with the chosen backend.
 codex_cmd() {
-  local logbase=$1 tname=$2 model=${3:-${ORCH_CODEX_MODEL:-}} effort=${4:-${ORCH_CODEX_EFFORT:-}} sandbox=${5:-workspace-write}
+  local logbase=$1 tname=$2 model=${3:-${ORCH_CODEX_MODEL:-gpt-6.1-sol}} effort=${4:-${ORCH_CODEX_EFFORT:-medium}} sandbox=${5:-workspace-write}
   if [[ $BACKEND == claude ]]; then
     local a=(timeout "${ORCH_TIMEOUT:-3600}" claude -p --model "${ORCH_CLAUDE_MODEL:-claude-sonnet-5-5}" --effort "${ORCH_CLAUDE_EFFORT:-high}"
       --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash)
