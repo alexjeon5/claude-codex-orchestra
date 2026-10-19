@@ -12,6 +12,7 @@ Request: $ARGUMENTS
 
 Roles: you (Sonnet 5.5) lead and decide. `orchestra-scout` (Haiku 5.5) explores. `orchestra-advisor` (Opus) is on call ONLY at checkpoints A/B/C. Codex writes the code (gpt-6.1-sol) and verifies it first; Claude checks last. A read-only `gpt-6-astra` Codex advisor on top of the verifier is OPT-IN: only when the user explicitly asks for astra / a stronger Codex review.
 CLI: `orchestra init|run|diff|status`. Talk to the user in Korean (반말).
+Delegation language: every prompt you give to a subagent (scouts, advisor) is in English and tells it to answer in English. Subagent and Codex/Claude worker outputs and report files (`codex-verify.md`, `verify.md`, `advice-*.md`) are English. Only what you say to the user is Korean: translate/summarize those reports when you relay them.
 Context budget: keep your own context lean. Delegate exploration to scouts. Read only the files you must reason about. Never call the advisor outside A/B/C.
 
 ## 0. Setup

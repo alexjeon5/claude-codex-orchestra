@@ -122,7 +122,7 @@ Hard rules (other workers are editing this folder right now):
 - Run only the tests/checks for your own part; failures in files you don't own are not yours to fix.
 - If the same check fails twice, stop patching symptoms: find the root cause or report it as blocked.
 
-Final message (keep it short, in this shape):
+Final message (keep it short, ENGLISH ONLY, in this shape):
 ## Worker $n result
 - Status: done | partial | blocked
 - Files changed: ...
@@ -152,7 +152,7 @@ Do:
 
 Rules: never run state-changing git commands; never reformat the repo; never delete or regenerate lockfiles.
 
-Final message, in this exact shape (it is saved as the verification report):
+Final message, ENGLISH ONLY, in this exact shape (it is saved as the verification report):
 # $AGENT verification: PASS | FAIL
 ## Acceptance criteria
 - [PASS|FAIL|UNVERIFIED] <criterion> — evidence (command → result, or file:line)
@@ -182,7 +182,7 @@ Look for, without repeating routine checks:
 - verifier fixes that changed behavior instead of fixing glue; verifier claims you cannot confirm
 Run a command only to confirm a specific suspicion.
 
-Final message, exact shape (saved as the report):
+Final message, ENGLISH ONLY, exact shape (saved as the report):
 # Codex advisor: AGREE | CONCERNS
 ## Disagreements with the verifier
 - ... (or "none")
@@ -196,7 +196,7 @@ codex_cmd() {
   local logbase=$1 tname=$2 model=${3:-${ORCH_CODEX_MODEL:-gpt-6.1-sol}} effort=${4:-${ORCH_CODEX_EFFORT:-medium}} sandbox=${5:-workspace-write}
   if [[ $BACKEND == claude ]]; then
     local a=(timeout "${ORCH_TIMEOUT:-3600}" claude -p --model "${ORCH_CLAUDE_MODEL:-claude-sonnet-5-5}" --effort "${ORCH_CLAUDE_EFFORT:-high}"
-      --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash)
+      --permission-mode acceptEdits --append-system-prompt "Write all output, reports and replies in English." --allowedTools Read Edit Write Glob Grep Bash)
     echo "$(printf '%q ' "${a[@]}") < $(printf %q "$logbase.prompt") 2> $(printf %q "$logbase.err") | tee $(printf %q "$logbase.last.md")"
   elif [[ $BACKEND == daemon ]]; then
     local a=(python3 "$DAEMON_WORKER" --cwd "$ROOT" --prompt-file "$logbase.prompt" --last-file "$logbase.last.md"
